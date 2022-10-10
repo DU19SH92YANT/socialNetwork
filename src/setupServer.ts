@@ -1,47 +1,48 @@
-import { Application, json, urlencoded, Response, Request, NextFunction } from 'express'
-import http from 'http'
-import cors from 'cors'
-import helmet from 'helmet'
-import hpp from 'hpp'
-import cookerSession from 'cookie-session'
-import HTTP_STATUS from 'http-status-codes'
-import compression from 'compression'
-import { config } from './config'
-import { Server } from 'socket.io'
-import { createClient } from 'redis'
-import { createAdapter } from '@socket.io/redis-adapter'
-import applicationRoutes from './routes'
-import { CustomError, IErrorResponse } from './shared/global/helpers/error-handler'
-import Logger from 'bunyan'
-import 'express-async-errors'
+import { Application, json, urlencoded, Response, Request, NextFunction } from 'express';
+import http from 'http';
+import cors from 'cors';
+import helmet from 'helmet';
+import hpp from 'hpp';
+import cookieSession from 'cookie-session';
+import HTTP_STATUS from 'http-status-codes';
+import compression from 'compression';
+import { config } from '@root/config';
+import { Server } from 'socket.io';
+import redis = require('redis');
+import { createAdapter } from '@socket.io/redis-adapter';
+import applicationRoutes from './routes';
 
-const SERVER_PORT = 5000
-const log: Logger = config.createLogger('server')
+import Logger from 'bunyan';
+import 'express-async-errors';
+import { CustomError, IErrorResponse } from '@global/helpers/error-handler';
+
+const SERVER_PORT = 5000;
+const log: Logger = config.createLogger('server');
 export class ChattyServer {
-  private app: Application
+  private app: Application;
   constructor(app: Application) {
-    this.app = app
+    this.app = app;
   }
   public start(): void {
-    this.securityMiddleware(this.app)
-    this.standardMiddleware(this.app)
-    this.routeMiddleware(this.app)
-    this.globalErrorMiddleware(this.app)
-    this.routeMiddleware(this.app)
-    this.startServer(this.app)
+    this.securityMiddleware(this.app);
+    this.standardMiddleware(this.app);
+    this.routeMiddleware(this.app);
+    this.globalErrorMiddleware(this.app);
+    this.routeMiddleware(this.app);
+    this.startServer(this.app);
   }
 
   private securityMiddleware(app: Application): void {
     app.use(
-      cookerSession({
+      cookieSession({
         name: 'session',
         keys: [config.SECRET_KEY_ONE!, config.SECRET_KEY_TWO!],
         maxAge: 24 * 7 * 3600000,
         secure: config.NODE_ENV !== 'development'
       })
-    )
-    app.use(hpp())
-    app.use(helmet())
+    );
+    app.use(hpp());
+    app.use(helmet());
     app.use(
       cors({
         origin: config.CLIENT_URL,
@@ -49,73 +50,73 @@ export class ChattyServer {
         optionsSuccessStatus: 200,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
       })
-    )
+    );
   }
   private standardMiddleware(app: Application): void {
-    app.use(compression())
-    app.use(json({ limit: '50mb' }))
-    app.use(urlencoded({ extended: true, limit: 'save' }))
+    app.use(compression());
+    app.use(json({ limit: '50mb' }));
+    app.use(urlencoded({ extended: true, limit: 'save' }));
   }
   private routeMiddleware(app: Application): void {
-    applicationRoutes(app)
+    applicationRoutes(app);
   }
   private globalErrorMiddleware(app: Application): void {
     app.all('*', (req: Request, res: Response) => {
-      res.status(HTTP_STATUS.NOT_FOUND).json({ message: `${req.originalUrl} not found` })
-    })
+      res.status(HTTP_STATUS.NOT_FOUND).json({ message: `${req.originalUrl} not found` });
+    });
     app.use((error: IErrorResponse, _req: Request, res: Response, next: NextFunction) => {
-      log.error(error)
+      log.error(error);
       if (error instanceof CustomError) {
-        return res.status(error.statusCode).json(error.serializeErrors())
+        return res.status(error.statusCode).json(error.serializeErrors());
       }
-      next()
-    })
+      next();
+    });
   }
   private async startServer(app: Application): Promise<void> {
     try {
-      const httpServer: http.Server = new http.Server(app)
-      const socketIO: Server = await this.createSocketIO(httpServer)
-      this.startHttpServer(httpServer)
-      this.socketIOConnections(socketIO)
+      const httpServer: http.Server = new http.Server(app);
+      const socketIO: Server = await this.createSocketIO(httpServer);
+      this.startHttpServer(httpServer);
+      this.socketIOConnections(socketIO);
     } catch (error) {
-      log.error(error)
+      log.error(error);
     }
   }
   private async createSocketIO(httpServer: http.Server): Promise<Server> {
-    console.log('8')
+    console.log('8');
 
     const io: Server = new Server(httpServer, {
       cors: {
         origin: config.CLIENT_URL,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
       }
-    })
+    });
 
-    const pubClient = createClient({ url: config.REDIS_HOST })
+    const pubClient = redis.createClient({ url: config.REDIS_HOST });
 
-    const subClient = pubClient.duplicate()
+    const subClient = pubClient.duplicate();
 
-    // await Promise.all([pubClient.on(), subClient.on()])
+    pubClient.on('connect', function () {
+      console.log('Connected PubClient!');
+    });
+    subClient.on('connect', function () {
+      console.log('Connected subClient!');
+    });
 
-    // await pubClient.connect()
-    // await subClient.connect()
+    await Promise.all([pubClient.connect(), subClient.connect()]);
 
-    pubClient.on('error', (err) => console.log('Redis Client Error', err))
+    io.adapter(createAdapter(pubClient, subClient));
 
-    subClient.on('error', (err) => console.log('Redis Client Error', err))
-
-    io.adapter(createAdapter(pubClient, subClient))
-
-    return io
+    return io;
   }
   private startHttpServer(httpServer: http.Server): void {
-    log.info(`server has started with process ${process.pid}`)
+    log.info(`server has started with process ${process.pid}`);
 
     httpServer.listen(SERVER_PORT, () => {
-      log.info(`server running on port ${SERVER_PORT}`)
-    })
+      log.info(`server running on port ${SERVER_PORT}`);
+    });
   }
   private socketIOConnections(io: Server): void {
-    console.log('d')
+    log.info('socketIOConnection', io);
   }
 }
